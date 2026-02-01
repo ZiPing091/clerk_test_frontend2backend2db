@@ -1,9 +1,9 @@
 import os
-import requests
+import jwt
+from jwt import PyJWKClient
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import jwt
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
@@ -24,6 +24,10 @@ CLERK_ISSUER_URL = os.getenv("CLERK_ISSUER_URL") # 例如 https://clerk.your-app
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
+# 初始化 Clerk JWKS Client
+JWKS_URL = f"{CLERK_ISSUER_URL}/.well-known/jwks.json"
+jwks_client = PyJWKClient(JWKS_URL)
+
 if not all([CLERK_ISSUER_URL, SUPABASE_URL, SUPABASE_KEY]):
     print("Warning: Missing environment variables. Please check your .env file.")
 
@@ -41,12 +45,17 @@ security = HTTPBearer()
 def get_current_user(res: HTTPAuthorizationCredentials = Depends(security)):
     token = res.credentials
     try:
-        # 取得 Clerk 公鑰來驗證 JWT
-        jwks_url = f"{CLERK_ISSUER_URL}/.well-known/jwks.json"
-        jwks = requests.get(jwks_url).json()
+        # 使用 PyJWKClient 自動取得公鑰並快取
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
         
         # 解碼並驗證 (這會檢查過期時間與簽章)
-        payload = jwt.decode(token, jwks, algorithms=["RS256"], issuer=CLERK_ISSUER_URL)
+        payload = jwt.decode(
+            token, 
+            signing_key.key, 
+            algorithms=["RS256"], 
+            issuer=CLERK_ISSUER_URL,
+            options={"verify_aud": False}  # Clerk JWT 的 aud 通常是前端 Client ID，若後端不需要驗證 aud 可設為 False
+        )
         return payload["sub"] # 這就是 clerk_user_id
     except Exception as e:
         print(f"Token validation error: {e}")
